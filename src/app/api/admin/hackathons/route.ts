@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllHackathons, createHackathon } from '@/lib/hackathons-storage';
 import { Hackathon } from '@/lib/hackathons-data';
+import { isAdminRequest } from '@/lib/api-auth';
 
 export async function GET() {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const hackathons = await getAllHackathons();
     const hackathonsArray = Object.values(hackathons).sort((a, b) => 
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -20,6 +25,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
     
     // Validate required fields

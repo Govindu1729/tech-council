@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { isAdminRequest } from '@/lib/api-auth'
 import { getBlobSettings, updateBlobSettings, resetBlobSettings } from '@/lib/blob-storage'
 
 // GET - Retrieve blob settings
 export async function GET() {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const settings = getBlobSettings()
     return NextResponse.json(settings)
   } catch (error) {
@@ -20,11 +23,9 @@ export async function GET() {
 // PUT - Update blob settings
 export async function PUT(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    
-    if (!session?.user?.email) {
+    if (!(await isAdminRequest())) {
       return NextResponse.json(
-        { error: 'Authentication required' },
+        { error: 'Unauthorized' },
         { status: 401 }
       )
     }
@@ -67,11 +68,9 @@ export async function PUT(request: NextRequest) {
 // DELETE - Reset blob settings to default
 export async function DELETE() {
   try {
-    const session = await getServerSession(authOptions)
-    
-    if (!session?.user?.email) {
+    if (!(await isAdminRequest())) {
       return NextResponse.json(
-        { error: 'Authentication required' },
+        { error: 'Unauthorized' },
         { status: 401 }
       )
     }

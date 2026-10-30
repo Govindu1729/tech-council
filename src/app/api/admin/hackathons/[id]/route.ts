@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHackathonById, updateHackathon, deleteHackathon } from '@/lib/hackathons-storage';
+import { isAdminRequest } from '@/lib/api-auth';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
     const hackathon = await getHackathonById(id);
     
@@ -31,6 +36,10 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
     const body = await request.json();
 
@@ -61,6 +70,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
     await deleteHackathon(id);
     return NextResponse.json({ message: 'Hackathon deleted successfully' });

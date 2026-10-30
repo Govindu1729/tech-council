@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllInterIITEvents, createInterIITEvent } from '@/lib/inter-iit-storage';
+import { isAdminRequest } from '@/lib/api-auth';
 
 export async function GET() {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const events = await getAllInterIITEvents();
     const eventsArray = Object.values(events).sort((a, b) => 
       new Date(b.year).getTime() - new Date(a.year).getTime()
@@ -19,6 +24,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
     
     // Validate required fields

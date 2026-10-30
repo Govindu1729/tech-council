@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getInterIITAchievementById, updateInterIITAchievement, deleteInterIITAchievement } from '@/lib/inter-iit-achievements-storage';
+import { isAdminRequest } from '@/lib/api-auth';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isAdminRequest())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
   try {
     const achievement = await getInterIITAchievementById(id);
@@ -30,6 +35,10 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isAdminRequest())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
   try {
     const body = await request.json();
@@ -65,6 +74,10 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isAdminRequest())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
   try {
     await deleteInterIITAchievement(id);

@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllInterIITAchievements, createInterIITAchievement } from '@/lib/inter-iit-achievements-storage';
+import { isAdminRequest } from '@/lib/api-auth';
 
 export async function GET() {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const achievements = await getAllInterIITAchievements();
     const achievementsArray = Object.values(achievements).sort((a, b) =>
       new Date(b.achievementDate).getTime() - new Date(a.achievementDate).getTime()
@@ -19,6 +24,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!(await isAdminRequest())) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     // Validate required fields
