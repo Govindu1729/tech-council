@@ -1,5 +1,10 @@
-import { promises as fs } from 'fs';
+import fs from 'fs';
 import path from 'path';
+import { 
+  getDocById, 
+  setDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
 export interface AdminEmailsData {
   emails: string[];
@@ -9,6 +14,8 @@ export interface AdminEmailsData {
   updatedAt: string;
 }
 
+const COLLECTION = 'admin-emails';
+const DOC_ID = 'emails';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const ADMIN_EMAILS_FILE = path.join(DATA_DIR, 'admin-emails.json');
 
@@ -24,56 +31,72 @@ const defaultAdminEmails: AdminEmailsData = {
   updatedAt: new Date().toISOString()
 };
 
-// Ensure data directory exists
-async function ensureDataDir(): Promise<void> {
+// JSON file fallback helpers
+function ensureDataDir(): void {
   try {
-    await fs.access(DATA_DIR);
+    fs.accessSync(DATA_DIR);
   } catch {
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 }
 
-// Get admin emails
-export async function getAdminEmails(): Promise<AdminEmailsData> {
+function readJsonFile(): AdminEmailsData {
   try {
-    await ensureDataDir();
-    const data = await fs.readFile(ADMIN_EMAILS_FILE, 'utf-8');
+    ensureDataDir();
+    const data = fs.readFileSync(ADMIN_EMAILS_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.log('Admin emails file not found, creating with default emails');
-    await saveAdminEmails(defaultAdminEmails);
+  } catch {
     return defaultAdminEmails;
   }
 }
 
+function writeJsonFile(adminEmailsData: AdminEmailsData): AdminEmailsData {
+  const updatedData: AdminEmailsData = {
+    ...adminEmailsData,
+    lastModified: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const tempFile = `${ADMIN_EMAILS_FILE}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(updatedData, null, 2));
+  fs.renameSync(tempFile, ADMIN_EMAILS_FILE);
+  return updatedData;
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get admin emails
+export async function getAdminEmails(): Promise<AdminEmailsData> {
+  if (isFirestoreAvailable()) {
+    try {
+      const emails = await getDocById<AdminEmailsData>(COLLECTION, DOC_ID);
+      if (emails) {
+        return emails;
+      }
+    } catch (error) {
+      console.log('Admin emails not found in Firestore, falling back to JSON');
+    }
+  }
+  return readJsonFile();
+}
+
 // Save admin emails with atomic write operation
 export async function saveAdminEmails(adminEmailsData: AdminEmailsData): Promise<void> {
-  try {
-    await ensureDataDir();
-    
-    // Create temporary file for atomic write
-    const tempFile = `${ADMIN_EMAILS_FILE}.tmp`;
-    const data = JSON.stringify(adminEmailsData, null, 2);
-    
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-    
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, ADMIN_EMAILS_FILE);
-    
-    console.log('Admin emails saved successfully');
-  } catch (error) {
-    console.error('Error saving admin emails:', error);
-    
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${ADMIN_EMAILS_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      const updatedData: AdminEmailsData = {
+        ...adminEmailsData,
+        lastModified: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await setDocData<AdminEmailsData>(COLLECTION, DOC_ID, updatedData);
+      console.log('Admin emails saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving admin emails to Firestore, falling back to JSON:', error);
     }
-    
-    throw new Error('Failed to save admin emails');
   }
+  writeJsonFile(adminEmailsData);
+  console.log('Admin emails saved to JSON fallback successfully');
 }
 
 // Add admin email
@@ -147,12 +170,11 @@ export async function updateAdminEmails(emails: string[], modifiedBy: string): P
   // Remove duplicates
   const uniqueEmails = [...new Set(emails)];
   
-  const adminEmailsData = await getAdminEmails();
   const updatedData: AdminEmailsData = {
-    ...adminEmailsData,
     emails: uniqueEmails,
     lastModified: new Date().toISOString(),
     modifiedBy,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
   

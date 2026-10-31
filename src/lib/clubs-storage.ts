@@ -1,11 +1,20 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { Club, defaultClubsData } from './clubs-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'clubs';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const CLUBS_FILE = path.join(DATA_DIR, 'clubs.json');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir() {
   try {
     await fs.access(DATA_DIR);
@@ -14,63 +23,66 @@ async function ensureDataDir() {
   }
 }
 
-// Initialize clubs file if it doesn't exist
-async function initializeClubsFile() {
-  try {
-    await fs.access(CLUBS_FILE);
-  } catch {
-    await fs.writeFile(CLUBS_FILE, JSON.stringify(defaultClubsData, null, 2));
-  }
-}
-
-// Get all clubs
-export async function getAllClubs(): Promise<Record<string, Club>> {
+async function readJsonFile(): Promise<Record<string, Club>> {
   try {
     await ensureDataDir();
-    await initializeClubsFile();
-    
     const data = await fs.readFile(CLUBS_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.error('Error reading clubs:', error);
+  } catch {
     return defaultClubsData;
   }
 }
 
+async function writeJsonFile(clubs: Record<string, Club>): Promise<void> {
+  await ensureDataDir();
+  const tempFile = `${CLUBS_FILE}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(clubs, null, 2));
+  await fs.rename(tempFile, CLUBS_FILE);
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get all clubs
+export async function getAllClubs(): Promise<Record<string, Club>> {
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<Club>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        return docs;
+      }
+    } catch (error) {
+      console.error('Error reading clubs from Firestore, falling back to JSON:', error);
+    }
+  }
+  return readJsonFile();
+}
+
 // Get single club by ID
 export async function getClubById(id: string): Promise<Club | null> {
-  const clubs = await getAllClubs();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<Club>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading club from Firestore, falling back to JSON:', error);
+    }
+  }
+  const clubs = await readJsonFile();
   return clubs[id] || null;
 }
 
-// Save all clubs with atomic write operation
+// Save all clubs (replace entire collection)
 export async function saveAllClubs(clubs: Record<string, Club>): Promise<void> {
-  try {
-    await ensureDataDir();
-
-    // Create temporary file for atomic write
-    const tempFile = `${CLUBS_FILE}.tmp`;
-    const data = JSON.stringify(clubs, null, 2);
-
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, CLUBS_FILE);
-
-    console.log('Clubs data saved successfully');
-  } catch (error) {
-    console.error('Error saving clubs:', error);
-
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${CLUBS_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      await setAllDocs<Club>(COLLECTION, clubs);
+      console.log('Clubs data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving clubs to Firestore, falling back to JSON:', error);
     }
-
-    throw new Error('Failed to save clubs data');
   }
+  await writeJsonFile(clubs);
+  console.log('Clubs data saved to JSON fallback successfully');
 }
 
 // Create new club
@@ -121,9 +133,17 @@ export async function deleteClub(id: string): Promise<boolean> {
     return false;
   }
   
-  delete clubs[id];
-  await saveAllClubs(clubs);
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return true;
+    } catch (error) {
+      console.error('Error deleting club from Firestore, falling back to JSON:', error);
+    }
+  }
   
+  delete clubs[id];
+  await writeJsonFile(clubs);
   return true;
 }
 

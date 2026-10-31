@@ -1,11 +1,20 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { InterIITAchievement, defaultAchievementsData } from './inter-iit-achievements-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'inter-iit-achievements';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const ACHIEVEMENTS_FILE = path.join(DATA_DIR, 'inter-iit-achievements.json');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir(): Promise<void> {
   try {
     await fs.access(DATA_DIR);
@@ -14,17 +23,38 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Get all Inter-IIT achievements
-export async function getAllInterIITAchievements(): Promise<Record<string, InterIITAchievement>> {
+async function readJsonFile(): Promise<Record<string, InterIITAchievement>> {
   try {
     await ensureDataDir();
     const data = await fs.readFile(ACHIEVEMENTS_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.log('Inter-IIT achievements file not found, creating with default data');
-    await saveAllInterIITAchievements(defaultAchievementsData);
+  } catch {
     return defaultAchievementsData;
   }
+}
+
+async function writeJsonFile(achievements: Record<string, InterIITAchievement>): Promise<void> {
+  await ensureDataDir();
+  const tempFile = `${ACHIEVEMENTS_FILE}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(achievements, null, 2));
+  await fs.rename(tempFile, ACHIEVEMENTS_FILE);
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get all Inter-IIT achievements
+export async function getAllInterIITAchievements(): Promise<Record<string, InterIITAchievement>> {
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<InterIITAchievement>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        return docs;
+      }
+    } catch (error) {
+      console.log('Inter-IIT achievements not found in Firestore, falling back to JSON');
+    }
+  }
+  return readJsonFile();
 }
 
 // Get Inter-IIT achievements for public display (array format)
@@ -37,38 +67,33 @@ export async function getInterIITAchievementsForDisplay(): Promise<InterIITAchie
 
 // Get Inter-IIT achievement by ID
 export async function getInterIITAchievementById(id: string): Promise<InterIITAchievement | null> {
-  const achievements = await getAllInterIITAchievements();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<InterIITAchievement>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading Inter-IIT achievement from Firestore, falling back to JSON:', error);
+    }
+  }
+  const achievements = await readJsonFile();
   return achievements[id] || null;
 }
 
 // Save all Inter-IIT achievements with atomic write operation
 export async function saveAllInterIITAchievements(achievements: Record<string, InterIITAchievement>): Promise<void> {
-  try {
-    await ensureDataDir();
-    
-    // Create temporary file for atomic write
-    const tempFile = `${ACHIEVEMENTS_FILE}.tmp`;
-    const data = JSON.stringify(achievements, null, 2);
-    
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-    
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, ACHIEVEMENTS_FILE);
-    
-    console.log('Inter-IIT achievements data saved successfully');
-  } catch (error) {
-    console.error('Error saving Inter-IIT achievements:', error);
-    
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${ACHIEVEMENTS_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      await setAllDocs<InterIITAchievement>(COLLECTION, achievements);
+      console.log('Inter-IIT achievements data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving Inter-IIT achievements to Firestore, falling back to JSON:', error);
     }
-    
-    throw new Error('Failed to save Inter-IIT achievements data');
   }
+  const tempFile = `${ACHIEVEMENTS_FILE}.tmp`;
+  await ensureDataDir();
+  await fs.writeFile(tempFile, JSON.stringify(achievements, null, 2));
+  await fs.rename(tempFile, ACHIEVEMENTS_FILE);
+  console.log('Inter-IIT achievements data saved to JSON fallback successfully');
 }
 
 // Create new Inter-IIT achievement
@@ -128,8 +153,17 @@ export async function deleteInterIITAchievement(id: string): Promise<void> {
     throw new Error('Inter-IIT achievement not found');
   }
   
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return;
+    } catch (error) {
+      console.error('Error deleting Inter-IIT achievement from Firestore, falling back to JSON:', error);
+    }
+  }
+  
   delete achievements[id];
-  await saveAllInterIITAchievements(achievements);
+  await writeJsonFile(achievements);
 }
 
 // Get achievements by year

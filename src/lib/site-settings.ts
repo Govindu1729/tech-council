@@ -1,5 +1,10 @@
-import { promises as fs } from 'fs';
+import fs from 'fs';
 import path from 'path';
+import { 
+  getDocById, 
+  setDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
 export interface SiteSettings {
   hackathonsVisible: boolean;
@@ -9,6 +14,8 @@ export interface SiteSettings {
   updatedAt: string;
 }
 
+const COLLECTION = 'site-settings';
+const DOC_ID = 'settings';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'site-settings.json');
 
@@ -21,56 +28,70 @@ const defaultSettings: SiteSettings = {
   updatedAt: new Date().toISOString()
 };
 
-// Ensure data directory exists
-async function ensureDataDir(): Promise<void> {
+// JSON file fallback helpers
+function ensureDataDir(): void {
   try {
-    await fs.access(DATA_DIR);
+    fs.accessSync(DATA_DIR);
   } catch {
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 }
 
-// Get site settings
-export async function getSiteSettings(): Promise<SiteSettings> {
+function readJsonFile(): SiteSettings {
   try {
-    await ensureDataDir();
-    const data = await fs.readFile(SETTINGS_FILE, 'utf-8');
+    ensureDataDir();
+    const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.log('Site settings file not found, creating with default settings');
-    await saveSiteSettings(defaultSettings);
+  } catch {
     return defaultSettings;
   }
 }
 
+function writeJsonFile(settings: SiteSettings): SiteSettings {
+  const updatedSettings: SiteSettings = {
+    ...settings,
+    updatedAt: new Date().toISOString()
+  };
+  const tempFile = `${SETTINGS_FILE}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(updatedSettings, null, 2));
+  fs.renameSync(tempFile, SETTINGS_FILE);
+  return updatedSettings;
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get site settings
+export async function getSiteSettings(): Promise<SiteSettings> {
+  if (isFirestoreAvailable()) {
+    try {
+      const settings = await getDocById<SiteSettings>(COLLECTION, DOC_ID);
+      if (settings) {
+        return settings;
+      }
+    } catch (error) {
+      console.log('Site settings not found in Firestore, falling back to JSON');
+    }
+  }
+  return readJsonFile();
+}
+
 // Save site settings with atomic write operation
 export async function saveSiteSettings(settings: SiteSettings): Promise<void> {
-  try {
-    await ensureDataDir();
-    
-    // Create temporary file for atomic write
-    const tempFile = `${SETTINGS_FILE}.tmp`;
-    const data = JSON.stringify(settings, null, 2);
-    
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-    
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, SETTINGS_FILE);
-    
-    console.log('Site settings saved successfully');
-  } catch (error) {
-    console.error('Error saving site settings:', error);
-    
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${SETTINGS_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      const updatedSettings: SiteSettings = {
+        ...settings,
+        updatedAt: new Date().toISOString()
+      };
+      await setDocData<SiteSettings>(COLLECTION, DOC_ID, updatedSettings);
+      console.log('Site settings saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving site settings to Firestore, falling back to JSON:', error);
     }
-    
-    throw new Error('Failed to save site settings');
   }
+  writeJsonFile(settings);
+  console.log('Site settings saved to JSON fallback successfully');
 }
 
 // Update specific setting

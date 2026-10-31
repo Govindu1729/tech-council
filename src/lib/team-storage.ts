@@ -7,11 +7,20 @@ import {
   isSecretaryPosition,
   isCoordinatorPosition
 } from './team-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'team';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const TEAM_FILE = path.join(DATA_DIR, 'team.json');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir() {
   try {
     await fs.access(DATA_DIR);
@@ -20,13 +29,19 @@ async function ensureDataDir() {
   }
 }
 
-// Initialize team file if it doesn't exist
-async function initializeTeamFile() {
+async function readJsonFile(): Promise<Record<string, TeamMember>> {
   try {
-    await fs.access(TEAM_FILE);
+    await ensureDataDir();
+    const data = await fs.readFile(TEAM_FILE, 'utf-8');
+    return JSON.parse(data);
   } catch {
-    await fs.writeFile(TEAM_FILE, JSON.stringify(defaultTeamData, null, 2));
+    return defaultTeamData;
   }
+}
+
+async function writeJsonFile(teamMembers: Record<string, TeamMember>): Promise<void> {
+  await ensureDataDir();
+  await fs.writeFile(TEAM_FILE, JSON.stringify(teamMembers, null, 2));
 }
 
 // Migrate team member data to ensure correct category mappings
@@ -50,46 +65,60 @@ function migrateTeamMemberData(teamMembers: Record<string, TeamMember>): Record<
   return migratedMembers;
 }
 
+// Firestore-backed operations with JSON fallback
+
 // Get all team members
 export async function getAllTeamMembers(): Promise<Record<string, TeamMember>> {
-  try {
-    await ensureDataDir();
-    await initializeTeamFile();
-
-    const data = await fs.readFile(TEAM_FILE, 'utf-8');
-    const teamMembers = JSON.parse(data);
-
-    // Migrate data to ensure correct mappings
-    const migratedMembers = migrateTeamMemberData(teamMembers);
-
-    // Save migrated data if there were changes
-    const hasChanges = JSON.stringify(teamMembers) !== JSON.stringify(migratedMembers);
-    if (hasChanges) {
-      await saveAllTeamMembers(migratedMembers);
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<TeamMember>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        const migrated = migrateTeamMemberData(docs);
+        // Persist migration if changes were made
+        const hasChanges = JSON.stringify(docs) !== JSON.stringify(migrated);
+        if (hasChanges) {
+          try {
+            await setAllDocs<TeamMember>(COLLECTION, migrated);
+          } catch {
+            // ignore persistence errors for migration
+          }
+        }
+        return migrated;
+      }
+    } catch (error) {
+      console.error('Error reading team members from Firestore, falling back to JSON:', error);
     }
-
-    return migratedMembers;
-  } catch (error) {
-    console.error('Error reading team members:', error);
-    return defaultTeamData;
   }
+  const data = await readJsonFile();
+  return migrateTeamMemberData(data);
 }
 
 // Get single team member by ID
 export async function getTeamMemberById(id: string): Promise<TeamMember | null> {
-  const teamMembers = await getAllTeamMembers();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<TeamMember>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading team member from Firestore, falling back to JSON:', error);
+    }
+  }
+  const teamMembers = await readJsonFile();
   return teamMembers[id] || null;
 }
 
 // Save all team members
 export async function saveAllTeamMembers(teamMembers: Record<string, TeamMember>): Promise<void> {
-  try {
-    await ensureDataDir();
-    await fs.writeFile(TEAM_FILE, JSON.stringify(teamMembers, null, 2));
-  } catch (error) {
-    console.error('Error saving team members:', error);
-    throw new Error('Failed to save team members');
+  if (isFirestoreAvailable()) {
+    try {
+      await setAllDocs<TeamMember>(COLLECTION, teamMembers);
+      console.log('Team data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving team members to Firestore, falling back to JSON:', error);
+    }
   }
+  await writeJsonFile(teamMembers);
+  console.log('Team data saved to JSON fallback successfully');
 }
 
 // Create new team member
@@ -156,9 +185,17 @@ export async function deleteTeamMember(id: string): Promise<boolean> {
     return false;
   }
 
-  delete teamMembers[id];
-  await saveAllTeamMembers(teamMembers);
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return true;
+    } catch (error) {
+      console.error('Error deleting team member from Firestore, falling back to JSON:', error);
+    }
+  }
 
+  delete teamMembers[id];
+  await writeJsonFile(teamMembers);
   return true;
 }
 

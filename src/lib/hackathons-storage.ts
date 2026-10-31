@@ -1,11 +1,20 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { Hackathon, defaultHackathonsData } from './hackathons-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'hackathons';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const HACKATHONS_FILE = path.join(DATA_DIR, 'hackathons.json');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir(): Promise<void> {
   try {
     await fs.access(DATA_DIR);
@@ -14,17 +23,38 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Get all hackathons
-export async function getAllHackathons(): Promise<Record<string, Hackathon>> {
+async function readJsonFile(): Promise<Record<string, Hackathon>> {
   try {
     await ensureDataDir();
     const data = await fs.readFile(HACKATHONS_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.log('Hackathons file not found, creating with default data');
-    await saveAllHackathons(defaultHackathonsData);
+  } catch {
     return defaultHackathonsData;
   }
+}
+
+async function writeJsonFile(hackathons: Record<string, Hackathon>): Promise<void> {
+  await ensureDataDir();
+  const tempFile = `${HACKATHONS_FILE}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(hackathons, null, 2));
+  await fs.rename(tempFile, HACKATHONS_FILE);
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get all hackathons
+export async function getAllHackathons(): Promise<Record<string, Hackathon>> {
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<Hackathon>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        return docs;
+      }
+    } catch (error) {
+      console.log('Hackathons not found in Firestore, falling back to JSON');
+    }
+  }
+  return readJsonFile();
 }
 
 // Get hackathons for public display (array format)
@@ -37,38 +67,33 @@ export async function getHackathonsForDisplay(): Promise<Hackathon[]> {
 
 // Get hackathon by ID
 export async function getHackathonById(id: string): Promise<Hackathon | null> {
-  const hackathons = await getAllHackathons();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<Hackathon>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading hackathon from Firestore, falling back to JSON:', error);
+    }
+  }
+  const hackathons = await readJsonFile();
   return hackathons[id] || null;
 }
 
 // Save all hackathons with atomic write operation
 export async function saveAllHackathons(hackathons: Record<string, Hackathon>): Promise<void> {
-  try {
-    await ensureDataDir();
-    
-    // Create temporary file for atomic write
-    const tempFile = `${HACKATHONS_FILE}.tmp`;
-    const data = JSON.stringify(hackathons, null, 2);
-    
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-    
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, HACKATHONS_FILE);
-    
-    console.log('Hackathons data saved successfully');
-  } catch (error) {
-    console.error('Error saving hackathons:', error);
-    
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${HACKATHONS_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      await setAllDocs<Hackathon>(COLLECTION, hackathons);
+      console.log('Hackathons data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving hackathons to Firestore, falling back to JSON:', error);
     }
-    
-    throw new Error('Failed to save hackathons data');
   }
+  const tempFile = `${HACKATHONS_FILE}.tmp`;
+  await ensureDataDir();
+  await fs.writeFile(tempFile, JSON.stringify(hackathons, null, 2));
+  await fs.rename(tempFile, HACKATHONS_FILE);
+  console.log('Hackathons data saved to JSON fallback successfully');
 }
 
 // Create new hackathon
@@ -131,8 +156,17 @@ export async function deleteHackathon(id: string): Promise<void> {
     throw new Error('Hackathon not found');
   }
   
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return;
+    } catch (error) {
+      console.error('Error deleting hackathon from Firestore, falling back to JSON:', error);
+    }
+  }
+  
   delete hackathons[id];
-  await saveAllHackathons(hackathons);
+  await writeJsonFile(hackathons);
 }
 
 // Get hackathons by status
@@ -190,7 +224,6 @@ export async function getHackathonStats(): Promise<{
   };
   
   hackathons.forEach(hackathon => {
-    // Calculate total participants
     if (hackathon.currentParticipants) {
       const participants = parseInt(hackathon.currentParticipants.replace(/[^0-9]/g, ''));
       if (!isNaN(participants)) {
@@ -198,7 +231,6 @@ export async function getHackathonStats(): Promise<{
       }
     }
     
-    // Calculate total prize pool
     hackathon.prizes.forEach(prize => {
       const amount = parseInt(prize.amount.replace(/[^0-9]/g, ''));
       if (!isNaN(amount)) {

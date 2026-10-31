@@ -1,5 +1,10 @@
 import fs from 'fs';
 import path from 'path';
+import { 
+  getDocById, 
+  setDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
 export interface ContactInfo {
   address: {
@@ -21,6 +26,8 @@ export interface ContactInfo {
   modifiedBy: string;
 }
 
+const COLLECTION = 'contact-info';
+const DOC_ID = 'contact';
 const CONTACT_FILE = path.join(process.cwd(), 'data', 'contact-info.json');
 
 // Default contact information
@@ -52,86 +59,96 @@ function ensureDataDirectory() {
   }
 }
 
-// Get contact information
-export async function getContactInfo(): Promise<ContactInfo> {
-  try {
-    ensureDataDirectory();
-    
-    if (!fs.existsSync(CONTACT_FILE)) {
-      // Create default contact file if it doesn't exist
-      await saveContactInfo(DEFAULT_CONTACT);
-      return DEFAULT_CONTACT;
-    }
-
-    const data = fs.readFileSync(CONTACT_FILE, 'utf-8');
-    const contactInfo = JSON.parse(data);
-    
-    // Merge with defaults to ensure all fields exist
-    return {
-      ...DEFAULT_CONTACT,
-      ...contactInfo,
-      address: {
-        ...DEFAULT_CONTACT.address,
-        ...contactInfo.address
-      },
-      socialMedia: {
-        ...DEFAULT_CONTACT.socialMedia,
-        ...contactInfo.socialMedia
-      }
-    };
-  } catch (error) {
-    console.error('Error reading contact info:', error);
+// JSON file fallback helpers
+function readJsonFile(): ContactInfo {
+  ensureDataDirectory();
+  if (!fs.existsSync(CONTACT_FILE)) {
     return DEFAULT_CONTACT;
   }
+  const data = fs.readFileSync(CONTACT_FILE, 'utf-8');
+  const contactInfo = JSON.parse(data);
+  return {
+    ...DEFAULT_CONTACT,
+    ...contactInfo,
+    address: {
+      ...DEFAULT_CONTACT.address,
+      ...contactInfo.address
+    },
+    socialMedia: {
+      ...DEFAULT_CONTACT.socialMedia,
+      ...contactInfo.socialMedia
+    }
+  };
+}
+
+function writeJsonFile(contactInfo: ContactInfo): ContactInfo {
+  ensureDataDirectory();
+  const updatedContact = {
+    ...contactInfo,
+    lastModified: new Date().toISOString()
+  };
+  // Atomic write operation
+  const tempFile = `${CONTACT_FILE}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(updatedContact, null, 2));
+  fs.renameSync(tempFile, CONTACT_FILE);
+  return updatedContact;
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get contact information
+export async function getContactInfo(): Promise<ContactInfo> {
+  if (isFirestoreAvailable()) {
+    try {
+      const contact = await getDocById<ContactInfo>(COLLECTION, DOC_ID);
+      if (contact) {
+        return contact;
+      }
+    } catch (error) {
+      console.error('Error reading contact info from Firestore, falling back to JSON:', error);
+    }
+  }
+  return readJsonFile();
 }
 
 // Save contact information with atomic write
 export async function saveContactInfo(contactInfo: ContactInfo): Promise<ContactInfo> {
-  try {
-    ensureDataDirectory();
-    
-    const updatedContact = {
-      ...contactInfo,
-      lastModified: new Date().toISOString()
-    };
-
-    // Atomic write operation
-    const tempFile = `${CONTACT_FILE}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(updatedContact, null, 2));
-    fs.renameSync(tempFile, CONTACT_FILE);
-
-    return updatedContact;
-  } catch (error) {
-    console.error('Error saving contact info:', error);
-    throw new Error('Failed to save contact information');
+  if (isFirestoreAvailable()) {
+    try {
+      const updatedContact = {
+        ...contactInfo,
+        lastModified: new Date().toISOString()
+      };
+      await setDocData<ContactInfo>(COLLECTION, DOC_ID, updatedContact);
+      console.log('Contact info saved to Firestore successfully');
+      return updatedContact;
+    } catch (error) {
+      console.error('Error saving contact info to Firestore, falling back to JSON:', error);
+    }
   }
+  return writeJsonFile(contactInfo);
 }
 
 // Update specific contact field
 export async function updateContactField(field: string, value: any, modifiedBy: string): Promise<ContactInfo> {
-  try {
-    const currentContact = await getContactInfo();
-    
-    // Handle nested field updates
-    const updatedContact = { ...currentContact };
-    
-    if (field.includes('.')) {
-      const [parent, child] = field.split('.');
-      if (parent === 'address' || parent === 'socialMedia') {
-        updatedContact[parent as keyof ContactInfo] = {
-          ...(updatedContact[parent as keyof ContactInfo] as any),
-          [child]: value
-        };
-      }
-    } else {
-      (updatedContact as any)[field] = value;
+  const currentContact = await getContactInfo();
+  
+  // Handle nested field updates
+  const updatedContact = { ...currentContact };
+  
+  if (field.includes('.')) {
+    const [parent, child] = field.split('.');
+    if (parent === 'address' || parent === 'socialMedia') {
+      updatedContact[parent as keyof ContactInfo] = {
+        ...(updatedContact[parent as keyof ContactInfo] as any),
+        [child]: value
+      };
     }
-    
-    updatedContact.modifiedBy = modifiedBy;
-    
-    return await saveContactInfo(updatedContact);
-  } catch (error) {
-    console.error('Error updating contact field:', error);
-    throw new Error('Failed to update contact information');
+  } else {
+    (updatedContact as any)[field] = value;
   }
+  
+  updatedContact.modifiedBy = modifiedBy;
+  
+  return await saveContactInfo(updatedContact);
 }

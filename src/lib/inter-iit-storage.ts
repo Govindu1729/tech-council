@@ -1,11 +1,20 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { InterIITEvent, defaultInterIITData } from './inter-iit-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'inter-iit';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const INTER_IIT_FILE = path.join(DATA_DIR, 'inter-iit.json');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir(): Promise<void> {
   try {
     await fs.access(DATA_DIR);
@@ -14,17 +23,38 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Get all Inter-IIT events
-export async function getAllInterIITEvents(): Promise<Record<string, InterIITEvent>> {
+async function readJsonFile(): Promise<Record<string, InterIITEvent>> {
   try {
     await ensureDataDir();
     const data = await fs.readFile(INTER_IIT_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.log('Inter-IIT file not found, creating with default data');
-    await saveAllInterIITEvents(defaultInterIITData);
+  } catch {
     return defaultInterIITData;
   }
+}
+
+async function writeJsonFile(events: Record<string, InterIITEvent>): Promise<void> {
+  await ensureDataDir();
+  const tempFile = `${INTER_IIT_FILE}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(events, null, 2));
+  await fs.rename(tempFile, INTER_IIT_FILE);
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get all Inter-IIT events
+export async function getAllInterIITEvents(): Promise<Record<string, InterIITEvent>> {
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<InterIITEvent>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        return docs;
+      }
+    } catch (error) {
+      console.log('Inter-IIT events not found in Firestore, falling back to JSON');
+    }
+  }
+  return readJsonFile();
 }
 
 // Get Inter-IIT events for public display (array format)
@@ -37,38 +67,33 @@ export async function getInterIITEventsForDisplay(): Promise<InterIITEvent[]> {
 
 // Get Inter-IIT event by ID
 export async function getInterIITEventById(id: string): Promise<InterIITEvent | null> {
-  const events = await getAllInterIITEvents();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<InterIITEvent>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading Inter-IIT event from Firestore, falling back to JSON:', error);
+    }
+  }
+  const events = await readJsonFile();
   return events[id] || null;
 }
 
 // Save all Inter-IIT events with atomic write operation
 export async function saveAllInterIITEvents(events: Record<string, InterIITEvent>): Promise<void> {
-  try {
-    await ensureDataDir();
-    
-    // Create temporary file for atomic write
-    const tempFile = `${INTER_IIT_FILE}.tmp`;
-    const data = JSON.stringify(events, null, 2);
-    
-    // Write to temporary file first
-    await fs.writeFile(tempFile, data);
-    
-    // Atomically move temp file to final location
-    await fs.rename(tempFile, INTER_IIT_FILE);
-    
-    console.log('Inter-IIT data saved successfully');
-  } catch (error) {
-    console.error('Error saving Inter-IIT events:', error);
-    
-    // Clean up temp file if it exists
+  if (isFirestoreAvailable()) {
     try {
-      await fs.unlink(`${INTER_IIT_FILE}.tmp`);
-    } catch {
-      // Ignore cleanup errors
+      await setAllDocs<InterIITEvent>(COLLECTION, events);
+      console.log('Inter-IIT data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving Inter-IIT events to Firestore, falling back to JSON:', error);
     }
-    
-    throw new Error('Failed to save Inter-IIT data');
   }
+  const tempFile = `${INTER_IIT_FILE}.tmp`;
+  await ensureDataDir();
+  await fs.writeFile(tempFile, JSON.stringify(events, null, 2));
+  await fs.rename(tempFile, INTER_IIT_FILE);
+  console.log('Inter-IIT data saved to JSON fallback successfully');
 }
 
 // Create new Inter-IIT event
@@ -128,8 +153,17 @@ export async function deleteInterIITEvent(id: string): Promise<void> {
     throw new Error('Inter-IIT event not found');
   }
   
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return;
+    } catch (error) {
+      console.error('Error deleting Inter-IIT event from Firestore, falling back to JSON:', error);
+    }
+  }
+  
   delete events[id];
-  await saveAllInterIITEvents(events);
+  await writeJsonFile(events);
 }
 
 // Get events by year
@@ -178,7 +212,6 @@ export async function getInterIITStats(): Promise<{
   let bestPosition = Infinity;
   
   events.forEach(event => {
-    // Count medals from achievements
     event.achievements.forEach(achievement => {
       if (achievement.medal) {
         totalMedals++;
@@ -188,7 +221,6 @@ export async function getInterIITStats(): Promise<{
       }
     });
     
-    // Find our position in overall results
     const ourResult = event.overallResults.find(result => result.iit === 'IIT Gandhinagar');
     if (ourResult) {
       totalPosition += ourResult.position;

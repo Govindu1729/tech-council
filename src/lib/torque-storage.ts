@@ -1,14 +1,24 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { TorqueMagazine, defaultTorqueData, TorqueStats, defaultTorqueStats } from './torque-data';
+import { 
+  getCollection, 
+  getDocById, 
+  setDocData, 
+  setAllDocs, 
+  deleteDocData, 
+  isFirestoreAvailable 
+} from './firestore';
 
+const COLLECTION = 'torque';
+const STATS_COLLECTION = 'torque-stats';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const TORQUE_FILE = path.join(DATA_DIR, 'torque.json');
 const TORQUE_STATS_FILE = path.join(DATA_DIR, 'torque-stats.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'torque', 'magazines');
 const COVERS_DIR = path.join(process.cwd(), 'public', 'torque', 'covers');
 
-// Ensure data directory exists
+// JSON file fallback helpers
 async function ensureDataDir() {
   try {
     await fs.access(DATA_DIR);
@@ -17,59 +27,48 @@ async function ensureDataDir() {
   }
 }
 
-// Ensure uploads directory exists
-async function ensureUploadsDir() {
-  try {
-    await fs.access(UPLOADS_DIR);
-  } catch {
-    await fs.mkdir(UPLOADS_DIR, { recursive: true });
-  }
-}
-
-// Ensure covers directory exists
-async function ensureCoversDir() {
-  try {
-    await fs.access(COVERS_DIR);
-  } catch {
-    await fs.mkdir(COVERS_DIR, { recursive: true });
-  }
-}
-
-// Initialize torque file if it doesn't exist
-async function initializeTorqueFile() {
-  try {
-    await fs.access(TORQUE_FILE);
-  } catch {
-    await fs.writeFile(TORQUE_FILE, JSON.stringify(defaultTorqueData, null, 2));
-  }
-}
-
-// Initialize torque stats file if it doesn't exist
-async function initializeTorqueStatsFile() {
-  try {
-    await fs.access(TORQUE_STATS_FILE);
-  } catch {
-    await fs.writeFile(TORQUE_STATS_FILE, JSON.stringify(defaultTorqueStats, null, 2));
-  }
-}
-
-// Get all magazines
-export async function getAllMagazines(): Promise<Record<string, TorqueMagazine>> {
+async function readJsonFile(): Promise<Record<string, TorqueMagazine>> {
   try {
     await ensureDataDir();
-    await initializeTorqueFile();
-    
     const data = await fs.readFile(TORQUE_FILE, 'utf-8');
     return JSON.parse(data);
-  } catch (error) {
-    console.error('Error reading magazines:', error);
+  } catch {
     return defaultTorqueData;
   }
 }
 
+async function writeJsonFile(magazines: Record<string, TorqueMagazine>): Promise<void> {
+  await ensureDataDir();
+  await fs.writeFile(TORQUE_FILE, JSON.stringify(magazines, null, 2));
+}
+
+// Firestore-backed operations with JSON fallback
+
+// Get all magazines
+export async function getAllMagazines(): Promise<Record<string, TorqueMagazine>> {
+  if (isFirestoreAvailable()) {
+    try {
+      const docs = await getCollection<TorqueMagazine>(COLLECTION);
+      if (docs && Object.keys(docs).length > 0) {
+        return docs;
+      }
+    } catch (error) {
+      console.error('Error reading magazines from Firestore, falling back to JSON:', error);
+    }
+  }
+  return readJsonFile();
+}
+
 // Get single magazine by ID
 export async function getMagazineById(id: string): Promise<TorqueMagazine | null> {
-  const magazines = await getAllMagazines();
+  if (isFirestoreAvailable()) {
+    try {
+      return await getDocById<TorqueMagazine>(COLLECTION, id);
+    } catch (error) {
+      console.error('Error reading magazine from Firestore, falling back to JSON:', error);
+    }
+  }
+  const magazines = await readJsonFile();
   return magazines[id] || null;
 }
 
@@ -82,13 +81,17 @@ export async function getLatestMagazine(): Promise<TorqueMagazine | null> {
 
 // Save all magazines
 export async function saveAllMagazines(magazines: Record<string, TorqueMagazine>): Promise<void> {
-  try {
-    await ensureDataDir();
-    await fs.writeFile(TORQUE_FILE, JSON.stringify(magazines, null, 2));
-  } catch (error) {
-    console.error('Error saving magazines:', error);
-    throw new Error('Failed to save magazines');
+  if (isFirestoreAvailable()) {
+    try {
+      await setAllDocs<TorqueMagazine>(COLLECTION, magazines);
+      console.log('Magazines data saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving magazines to Firestore, falling back to JSON:', error);
+    }
   }
+  await writeJsonFile(magazines);
+  console.log('Magazines data saved to JSON fallback successfully');
 }
 
 // Create new magazine
@@ -160,6 +163,15 @@ export async function deleteMagazine(id: string): Promise<boolean> {
     return false;
   }
   
+  if (isFirestoreAvailable()) {
+    try {
+      await deleteDocData(COLLECTION, id);
+      return true;
+    } catch (error) {
+      console.error('Error deleting magazine from Firestore, falling back to JSON:', error);
+    }
+  }
+  
   // Delete the file if it exists
   try {
     const filePath = path.join(process.cwd(), 'public', magazines[id].filePath);
@@ -169,8 +181,7 @@ export async function deleteMagazine(id: string): Promise<boolean> {
   }
   
   delete magazines[id];
-  await saveAllMagazines(magazines);
-  
+  await writeJsonFile(magazines);
   return true;
 }
 
@@ -218,10 +229,18 @@ export async function getMagazinesForDisplay(): Promise<Array<{
 
 // Get Torque statistics
 export async function getTorqueStats(): Promise<TorqueStats> {
+  if (isFirestoreAvailable()) {
+    try {
+      const stats = await getDocById<TorqueStats>(STATS_COLLECTION, 'stats');
+      if (stats) {
+        return stats;
+      }
+    } catch (error) {
+      console.error('Error reading torque stats from Firestore, falling back to JSON:', error);
+    }
+  }
   try {
     await ensureDataDir();
-    await initializeTorqueStatsFile();
-    
     const data = await fs.readFile(TORQUE_STATS_FILE, 'utf-8');
     return JSON.parse(data);
   } catch (error) {
@@ -232,9 +251,19 @@ export async function getTorqueStats(): Promise<TorqueStats> {
 
 // Update Torque statistics
 export async function updateTorqueStats(stats: TorqueStats): Promise<void> {
+  if (isFirestoreAvailable()) {
+    try {
+      await setDocData<TorqueStats>(STATS_COLLECTION, 'stats', stats);
+      console.log('Torque stats saved to Firestore successfully');
+      return;
+    } catch (error) {
+      console.error('Error saving torque stats to Firestore, falling back to JSON:', error);
+    }
+  }
   try {
     await ensureDataDir();
     await fs.writeFile(TORQUE_STATS_FILE, JSON.stringify(stats, null, 2));
+    console.log('Torque stats saved to JSON fallback successfully');
   } catch (error) {
     console.error('Error saving torque stats:', error);
     throw new Error('Failed to save torque stats');
@@ -243,6 +272,7 @@ export async function updateTorqueStats(stats: TorqueStats): Promise<void> {
 
 // Save uploaded file
 export async function saveUploadedFile(file: File, magazineId: string): Promise<string> {
+  await ensureDataDir();
   await ensureUploadsDir();
 
   const fileName = `${magazineId}.pdf`;
@@ -256,6 +286,7 @@ export async function saveUploadedFile(file: File, magazineId: string): Promise<
 
 // Save uploaded cover photo
 export async function saveCoverPhoto(file: File, magazineId: string): Promise<{ filePath: string; fileName: string }> {
+  await ensureDataDir();
   await ensureCoversDir();
 
   const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'jpg';
@@ -286,5 +317,22 @@ export async function deleteCoverPhoto(magazineId: string): Promise<void> {
     } catch {
       // File doesn't exist, continue to next extension
     }
+  }
+}
+
+// Ensure directories exist
+async function ensureUploadsDir() {
+  try {
+    await fs.access(UPLOADS_DIR);
+  } catch {
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+  }
+}
+
+async function ensureCoversDir() {
+  try {
+    await fs.access(COVERS_DIR);
+  } catch {
+    await fs.mkdir(COVERS_DIR, { recursive: true });
   }
 }

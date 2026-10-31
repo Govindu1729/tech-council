@@ -2,6 +2,7 @@
 import { initializeApp, getApps, cert, ServiceAccount } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
 import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
 
 // Parse the service account key from environment variable
 const getServiceAccount = (): ServiceAccount | null => {
@@ -24,6 +25,7 @@ const getServiceAccount = (): ServiceAccount | null => {
 let adminStorage: any = null;
 let bucket: any = null;
 let auth: any = null;
+let firestore: any = null;
 
 try {
   if (getApps().length === 0) {
@@ -37,6 +39,7 @@ try {
         adminStorage = getStorage();
         bucket = adminStorage.bucket();
         auth = getAuth();
+        firestore = getFirestore();
       } catch (error) {
         console.warn('Failed to initialize Firebase Admin:', error);
       }
@@ -46,10 +49,11 @@ try {
     adminStorage = getStorage();
     bucket = adminStorage.bucket();
     auth = getAuth();
+    firestore = getFirestore();
   }
 } catch (error) {
   console.warn('Firebase Admin initialization error:', error);
 }
 
 // Export instances (may be null if Firebase Admin is not configured)
-export { adminStorage, bucket, auth };
+export { adminStorage, bucket, auth, firestore };
