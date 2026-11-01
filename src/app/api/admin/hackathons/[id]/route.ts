@@ -1,21 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { getHackathonById, updateHackathon, deleteHackathon } from '@/lib/hackathons-storage';
+
+async function checkAdminAuth() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.isAdmin) {
+    return false;
+  }
+  return true;
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     const hackathon = await getHackathonById(id);
-    
+
     if (!hackathon) {
       return NextResponse.json(
         { error: 'Hackathon not found' },
         { status: 404 }
       );
     }
-    
+
     return NextResponse.json(hackathon);
   } catch (error) {
     console.error('Error fetching hackathon:', error);
@@ -30,6 +45,11 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     const body = await request.json();
@@ -60,6 +80,11 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     await deleteHackathon(id);

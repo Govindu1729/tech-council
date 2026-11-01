@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllInterIITEvents, createInterIITEvent } from '@/lib/inter-iit-storage';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+async function checkAdminAuth() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.isAdmin) {
+    return false;
+  }
+  return true;
+}
 
 export async function GET() {
+    const isAdmin = await checkAdminAuth();
+    if (!isAdmin) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
   try {
     const events = await getAllInterIITEvents();
     const eventsArray = Object.values(events).sort((a, b) => 
@@ -18,6 +32,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+    const isAdmin = await checkAdminAuth();
+    if (!isAdmin) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
   try {
     const body = await request.json();
     

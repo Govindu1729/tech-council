@@ -1,21 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { getInterIITEventById, updateInterIITEvent, deleteInterIITEvent } from '@/lib/inter-iit-storage';
+
+async function checkAdminAuth() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.isAdmin) {
+    return false;
+  }
+  return true;
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     const event = await getInterIITEventById(id);
-    
+
     if (!event) {
       return NextResponse.json(
         { error: 'Inter-IIT event not found' },
         { status: 404 }
       );
     }
-    
+
     return NextResponse.json(event);
   } catch (error) {
     console.error('Error fetching Inter-IIT event:', error);
@@ -30,6 +45,11 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     const body = await request.json();
@@ -60,6 +80,11 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const isAdmin = await checkAdminAuth();
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { id } = await params;
     await deleteInterIITEvent(id);

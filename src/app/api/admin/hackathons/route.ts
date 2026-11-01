@@ -1,8 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllHackathons, createHackathon } from '@/lib/hackathons-storage';
 import { Hackathon } from '@/lib/hackathons-data';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+async function checkAdminAuth() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.isAdmin) {
+    return false;
+  }
+  return true;
+}
 
 export async function GET() {
+    const isAdmin = await checkAdminAuth();
+    if (!isAdmin) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
   try {
     const hackathons = await getAllHackathons();
     const hackathonsArray = Object.values(hackathons).sort((a, b) => 
@@ -19,6 +33,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+    const isAdmin = await checkAdminAuth();
+    if (!isAdmin) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
   try {
     const body = await request.json();
     
